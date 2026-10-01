@@ -1,7 +1,11 @@
+import 'dart:math' as math;
+
 import 'package:tickrail/domain/market.dart';
 import 'package:tickrail/domain/odds.dart';
 import 'package:tickrail/domain/order.dart';
+import 'package:tickrail/domain/position.dart';
 import 'package:tickrail/domain/side.dart';
+import 'package:tickrail/domain/tape.dart';
 
 class DeskStore {
   DeskStore({List<Market>? markets, List<Order>? orders}) {
@@ -98,10 +102,12 @@ class DeskStore {
       (order) =>
           order.marketId == marketId &&
           order.oddsIndex == oddsIndex &&
-          order.side == side,
+          order.side == side &&
+          order.remainingCents > 0,
     );
     if (existing >= 0) {
-      final next = _orders[existing].withStake(stakeCents);
+      final resting = _orders[existing];
+      final next = resting.withStake(resting.matchedCents + stakeCents);
       _orders[existing] = next;
       return next;
     }
@@ -127,13 +133,53 @@ class DeskStore {
   }
 
   void cancel(String id) {
-    final before = _orders.length;
-    _orders.removeWhere((order) => order.id == id);
-    if (_orders.length == before) throw ArgumentError.value(id, 'id');
+    final index = _orders.indexWhere((order) => order.id == id);
+    if (index < 0) throw ArgumentError.value(id, 'id');
+    final order = _orders[index];
+    if (order.matchedCents == 0) {
+      _orders.removeAt(index);
+    } else {
+      _orders[index] = order.withStake(order.matchedCents);
+    }
+  }
+
+  bool match(String marketId, TapeFrame frame) {
+    final quotes = <int, Quote>{
+      for (final quote in frame.quotes) quote.oddsIndex: quote,
+    };
+    var filled = false;
+    for (var i = 0; i < _orders.length; i++) {
+      final order = _orders[i];
+      if (order.marketId != marketId || order.remainingCents == 0) continue;
+      final quote = quotes[order.oddsIndex];
+      if (quote == null) continue;
+      final available = order.side == Side.back
+          ? quote.backCents
+          : quote.layCents;
+      final cents = math.min(order.remainingCents, available);
+      if (cents == 0) continue;
+      _orders[i] = order.filled(cents);
+      filled = true;
+    }
+    return filled;
+  }
+
+  Position positionFor(String marketId) {
+    var position = const Position();
+    for (final order in _orders) {
+      if (order.marketId != marketId || order.matchedCents == 0) continue;
+      position = position.matched(
+        order.side,
+        order.matchedCents,
+        Odds.at(order.oddsIndex).hundredths,
+      );
+    }
+    return position;
   }
 
   int liabilityCents(String marketId) {
-    var total = 0;
+    final position = positionFor(marketId);
+    var total = math.max(0, -math.min(position.winCents, position.loseCents));
     for (final order in _orders) {
       if (order.marketId != marketId) continue;
       total += order.riskCents(Odds.at(order.oddsIndex).hundredths);
