@@ -7,10 +7,17 @@ import 'package:tickrail/domain/tape.dart';
 import 'package:tickrail/paint/desk_colors.dart';
 
 class CellStake {
-  const CellStake({this.backCents = 0, this.layCents = 0});
+  const CellStake({
+    this.backCents = 0,
+    this.layCents = 0,
+    this.backMatchedCents = 0,
+    this.layMatchedCents = 0,
+  });
 
   final int backCents;
   final int layCents;
+  final int backMatchedCents;
+  final int layMatchedCents;
 }
 
 class LadderSnapshot {
@@ -79,6 +86,7 @@ class LadderRailBox extends RenderBox {
 
   static const double headerHeight = 22;
   static const double rowHeight = 32;
+  static const double _markHeight = 3;
 
   final TextPainter _text = TextPainter(textDirection: TextDirection.ltr);
 
@@ -295,11 +303,19 @@ class LadderRailBox extends RenderBox {
       size: 11,
     );
 
-    if (stake != null && stake.backCents > 0) {
-      _mark(canvas, offset.dx + col, top, col);
+    if (stake == null) return;
+    final bottom = top + rowHeight - _markHeight;
+    if (stake.backCents > 0) {
+      _mark(canvas, offset.dx + col, bottom, col, DeskColors.brass);
     }
-    if (stake != null && stake.layCents > 0) {
-      _mark(canvas, offset.dx + col * 3, top, col);
+    if (stake.layCents > 0) {
+      _mark(canvas, offset.dx + col * 3, bottom, col, DeskColors.brass);
+    }
+    if (stake.backMatchedCents > 0) {
+      _mark(canvas, offset.dx + col, top, col, DeskColors.fill);
+    }
+    if (stake.layMatchedCents > 0) {
+      _mark(canvas, offset.dx + col * 3, top, col, DeskColors.fill);
     }
   }
 
@@ -307,10 +323,10 @@ class LadderRailBox extends RenderBox {
     canvas.drawRect(rect, Paint()..color = color);
   }
 
-  void _mark(Canvas canvas, double left, double top, double col) {
+  void _mark(Canvas canvas, double left, double top, double col, Color color) {
     canvas.drawRect(
-      Rect.fromLTWH(left, top + rowHeight - 3, col, 3),
-      Paint()..color = DeskColors.brass,
+      Rect.fromLTWH(left, top, col, _markHeight),
+      Paint()..color = color,
     );
   }
 

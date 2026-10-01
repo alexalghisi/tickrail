@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tickrail/domain/side.dart';
 import 'package:tickrail/domain/tape.dart';
+import 'package:tickrail/paint/desk_colors.dart';
 import 'package:tickrail/paint/ladder_rail.dart';
 
 void main() {
@@ -65,6 +66,52 @@ void main() {
     await tester.tapAt(Offset(rect.left + col * 3.5, rowTop + 8));
     expect(side, Side.lay);
     expect(oddsIndex, frame.quotes[8].oddsIndex);
+  });
+
+  testWidgets('resting stakes are marked in brass, matched ones in green', (
+    tester,
+  ) async {
+    final frame = buildDemoTape()[0];
+    final handle = RailHandle()
+      ..show(
+        LadderSnapshot(
+          seq: frame.seq,
+          quotes: frame.quotes,
+          stakes: {
+            frame.quotes[0].oddsIndex: const CellStake(
+              backCents: 400,
+              backMatchedCents: 600,
+            ),
+            frame.quotes[1].oddsIndex: const CellStake(layMatchedCents: 500),
+          },
+        ),
+      );
+    await tester.pumpWidget(_host(handle, (_, _) {}));
+
+    const col = 60.0;
+    const top = LadderRailBox.headerHeight;
+    const row = LadderRailBox.rowHeight;
+    final rail = find.byType(LadderRail);
+    expect(
+      rail,
+      _marks(const Rect.fromLTWH(col, top + row - 3, col, 3), DeskColors.brass),
+    );
+    expect(
+      rail,
+      _marks(const Rect.fromLTWH(col, top, col, 3), DeskColors.fill),
+    );
+    expect(
+      rail,
+      _marks(const Rect.fromLTWH(col * 3, top + row, col, 3), DeskColors.fill),
+    );
+  });
+}
+
+PaintPattern _marks(Rect rect, Color color) {
+  return paints..something((method, arguments) {
+    return method == #drawRect &&
+        arguments[0] == rect &&
+        (arguments[1] as Paint).color.toARGB32() == color.toARGB32();
   });
 }
 

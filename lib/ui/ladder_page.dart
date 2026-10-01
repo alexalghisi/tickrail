@@ -4,6 +4,7 @@ import 'package:tickrail/data/desk_store.dart';
 import 'package:tickrail/domain/money.dart';
 import 'package:tickrail/domain/odds.dart';
 import 'package:tickrail/domain/order.dart';
+import 'package:tickrail/domain/position.dart';
 import 'package:tickrail/domain/side.dart';
 import 'package:tickrail/domain/tape.dart';
 import 'package:tickrail/paint/ladder_rail.dart';
@@ -69,7 +70,9 @@ class _LadderPageState extends State<LadderPage>
     final length = widget.tape.length;
     _cursor = (_cursor + delta) % length;
     if (_cursor < 0) _cursor += length;
+    final filled = widget.store.match(widget.marketId, widget.tape[_cursor]);
     _publish();
+    if (filled) setState(() {});
   }
 
   void _select(int oddsIndex, Side side) {
@@ -101,10 +104,32 @@ class _LadderPageState extends State<LadderPage>
     setState(() => _error = null);
   }
 
+  Hedge? _hedgeQuote() {
+    final index = _selectedIndex;
+    if (index == null) return null;
+    return widget.store
+        .positionFor(widget.marketId)
+        .hedgeAt(Odds.at(index).hundredths);
+  }
+
+  void _hedge(Hedge hedge) {
+    widget.store.place(
+      marketId: widget.marketId,
+      side: hedge.side,
+      oddsIndex: _selectedIndex!,
+      stakeCents: hedge.stakeCents,
+    );
+    _publish();
+    setState(() => _error = null);
+  }
+
   Future<void> _amend(Order order) async {
     final cents = await showDialog<int>(
       context: context,
-      builder: (context) => _AmendStakeDialog(stakeCents: order.stakeCents),
+      builder: (context) => _AmendStakeDialog(
+        stakeCents: order.stakeCents,
+        matchedCents: order.matchedCents,
+      ),
     );
     if (cents != null && mounted) {
       widget.store.amend(order.id, cents);
@@ -118,9 +143,15 @@ class _LadderPageState extends State<LadderPage>
     final stakes = <int, CellStake>{};
     for (final order in widget.store.ordersFor(widget.marketId)) {
       final current = stakes[order.oddsIndex] ?? const CellStake();
-      stakes[order.oddsIndex] = order.side == Side.back
-          ? CellStake(backCents: order.stakeCents, layCents: current.layCents)
-          : CellStake(backCents: current.backCents, layCents: order.stakeCents);
+      final back = order.side == Side.back;
+      stakes[order.oddsIndex] = CellStake(
+        backCents: current.backCents + (back ? order.remainingCents : 0),
+        layCents: current.layCents + (back ? 0 : order.remainingCents),
+        backMatchedCents:
+            current.backMatchedCents + (back ? order.matchedCents : 0),
+        layMatchedCents:
+            current.layMatchedCents + (back ? 0 : order.matchedCents),
+      );
     }
     _handle.show(
       LadderSnapshot(
@@ -158,6 +189,8 @@ class _LadderPageState extends State<LadderPage>
       return const Scaffold(body: Center(child: Text('Market is gone.')));
     }
     final orders = widget.store.ordersFor(widget.marketId);
+    final position = widget.store.positionFor(widget.marketId);
+    final hedge = _hedgeQuote();
     return RepaintBoundary(
       key: const Key('ladder-boundary'),
       child: Scaffold(
@@ -184,6 +217,23 @@ class _LadderPageState extends State<LadderPage>
                   ),
                   const SizedBox(height: 8),
                   Text(_exposure()),
+                  if (!position.isFlat) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'If wins ${formatCents(position.winCents)}'
+                      '  if loses ${formatCents(position.loseCents)}',
+                      key: const Key('position'),
+                    ),
+                  ],
+                  if (hedge != null)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        key: const Key('hedge'),
+                        onPressed: () => _hedge(hedge),
+                        child: Text(_hedgeLabel(hedge)),
+                      ),
+                    ),
                   if (_error != null) ...[
                     const SizedBox(height: 4),
                     Text(
@@ -236,6 +286,21 @@ class _LadderPageState extends State<LadderPage>
     );
   }
 
+  String _hedgeLabel(Hedge hedge) {
+    final side = hedge.side == Side.back ? 'Back' : 'Lay';
+    final label = Odds.at(_selectedIndex!).label;
+    return 'Hedge: $side ${formatCents(hedge.stakeCents)} @ $label'
+        '  locks ${formatCents(hedge.lockedCents)}';
+  }
+
+  String _orderLabel(Order order) {
+    final side = order.side == Side.back ? 'Back' : 'Lay';
+    final label = Odds.at(order.oddsIndex).label;
+    final stake = '$side $label  ${formatCents(order.stakeCents)}';
+    if (order.matchedCents == 0) return stake;
+    return '$stake  matched ${formatCents(order.matchedCents)}';
+  }
+
   Widget _orders(List<Order> orders) {
     if (orders.isEmpty) {
       return const Center(child: Text('No open orders.'));
@@ -244,33 +309,33 @@ class _LadderPageState extends State<LadderPage>
       itemCount: orders.length,
       itemBuilder: (context, index) {
         final order = orders[index];
-        final side = order.side == Side.back ? 'Back' : 'Lay';
-        final label = Odds.at(order.oddsIndex).label;
         return ListTile(
           key: ValueKey(order.id),
           dense: true,
-          title: Text('$side $label  ${formatCents(order.stakeCents)}'),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                key: Key('amend-${order.id}'),
-                tooltip: 'Amend stake',
-                onPressed: () => _amend(order),
-                icon: const Icon(Icons.edit_outlined),
-              ),
-              IconButton(
-                key: Key('cancel-${order.id}'),
-                tooltip: 'Cancel order',
-                onPressed: () {
-                  widget.store.cancel(order.id);
-                  _publish();
-                  setState(() {});
-                },
-                icon: const Icon(Icons.close),
-              ),
-            ],
-          ),
+          title: Text(_orderLabel(order)),
+          trailing: order.remainingCents == 0
+              ? null
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      key: Key('amend-${order.id}'),
+                      tooltip: 'Amend stake',
+                      onPressed: () => _amend(order),
+                      icon: const Icon(Icons.edit_outlined),
+                    ),
+                    IconButton(
+                      key: Key('cancel-${order.id}'),
+                      tooltip: 'Cancel order',
+                      onPressed: () {
+                        widget.store.cancel(order.id);
+                        _publish();
+                        setState(() {});
+                      },
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
         );
       },
     );
@@ -278,9 +343,13 @@ class _LadderPageState extends State<LadderPage>
 }
 
 class _AmendStakeDialog extends StatefulWidget {
-  const _AmendStakeDialog({required this.stakeCents});
+  const _AmendStakeDialog({
+    required this.stakeCents,
+    required this.matchedCents,
+  });
 
   final int stakeCents;
+  final int matchedCents;
 
   @override
   State<_AmendStakeDialog> createState() => _AmendStakeDialogState();
@@ -302,6 +371,11 @@ class _AmendStakeDialogState extends State<_AmendStakeDialog> {
     final stake = Stake.parse(_field.text);
     if (stake == null) {
       setState(() => _error = 'Enter a stake in pounds.');
+      return;
+    }
+    if (stake.cents < widget.matchedCents) {
+      final matched = formatCents(widget.matchedCents);
+      setState(() => _error = '$matched is already matched.');
       return;
     }
     Navigator.pop(context, stake.cents);
