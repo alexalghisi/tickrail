@@ -2,6 +2,8 @@
 
 Live exchange prices painted on a Flutter render rail.
 
+**Download:** [latest release](https://github.com/alexalghisi/tickrail/releases/latest)
+
 A market that ticks twenty times a second should not walk the element tree.
 tickrail reserves layout, holds slot geometry, and writes the tape onto a
 RenderBox. Page chrome stays regular widgets. The hot path only marks paint.
